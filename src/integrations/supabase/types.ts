@@ -14,7 +14,77 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      price_history: {
+        Row: {
+          effectivity_date: string
+          id: number
+          is_deleted: boolean
+          product_code: string
+          stamp_op_by: string | null
+          stamp_op_date: string
+          stamp_op_type: string
+          unit_price: number
+        }
+        Insert: {
+          effectivity_date?: string
+          id?: number
+          is_deleted?: boolean
+          product_code: string
+          stamp_op_by?: string | null
+          stamp_op_date?: string
+          stamp_op_type?: string
+          unit_price?: number
+        }
+        Update: {
+          effectivity_date?: string
+          id?: number
+          is_deleted?: boolean
+          product_code?: string
+          stamp_op_by?: string | null
+          stamp_op_date?: string
+          stamp_op_type?: string
+          unit_price?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "price_history_product_code_fkey"
+            columns: ["product_code"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["product_code"]
+          },
+        ]
+      }
+      products: {
+        Row: {
+          description: string
+          is_deleted: boolean
+          product_code: string
+          stamp_op_by: string | null
+          stamp_op_date: string
+          stamp_op_type: string
+          unit: string
+        }
+        Insert: {
+          description?: string
+          is_deleted?: boolean
+          product_code: string
+          stamp_op_by?: string | null
+          stamp_op_date?: string
+          stamp_op_type?: string
+          unit?: string
+        }
+        Update: {
+          description?: string
+          is_deleted?: boolean
+          product_code?: string
+          stamp_op_by?: string | null
+          stamp_op_date?: string
+          stamp_op_type?: string
+          unit?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
