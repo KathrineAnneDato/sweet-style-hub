@@ -1,54 +1,81 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Search, Plus, Edit2, Trash2, RotateCcw, LogOut, ShoppingBag,
-  Package, AlertTriangle, Heart, Filter,
+  Search, Plus, RotateCcw, LogOut, ShoppingBag,
+  Package, MoreHorizontal, History, Edit2, Trash2, FileText,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
+  DropdownMenuSeparator, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import ProductDialog from '@/components/ProductDialog';
+import PriceHistoryDialog from '@/components/PriceHistoryDialog';
 import { useProducts } from '@/hooks/useProducts';
-import { Product, ProductFormData, CATEGORIES } from '@/types/product';
+import { Product, ProductFormData } from '@/types/product';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 interface DashboardProps {
-  userName: string;
+  user: { id: string; email: string; name: string; role: 'admin' | 'user' };
   onLogout: () => void;
 }
 
-const Dashboard = ({ userName, onLogout }: DashboardProps) => {
+const Dashboard = ({ user, onLogout }: DashboardProps) => {
   const {
-    products, allProducts, searchQuery, setSearchQuery,
-    categoryFilter, setCategoryFilter, showDeleted, setShowDeleted,
+    products, allProducts, loading, searchQuery, setSearchQuery,
+    showDeleted, setShowDeleted, permissions, userRole,
     addProduct, updateProduct, softDeleteProduct, restoreProduct,
-  } = useProducts();
+    fetchPriceHistory,
+  } = useProducts(user.id);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
+  const [priceHistoryProduct, setPriceHistoryProduct] = useState<Product | null>(null);
+  const [profilesMap, setProfilesMap] = useState<Map<string, string>>(new Map());
 
-  const activeCount = allProducts.filter(p => !p.isDeleted).length;
-  const deletedCount = allProducts.filter(p => p.isDeleted).length;
-  const lowStockCount = allProducts.filter(p => !p.isDeleted && p.quantity <= 5).length;
+  const isAdmin = userRole === 'admin';
+  const canAdd = isAdmin || permissions.can_add;
+  const canEdit = isAdmin || permissions.can_edit;
+  const canDelete = isAdmin || permissions.can_delete;
 
-  const handleSave = (data: ProductFormData) => {
-    if (editingProduct) {
-      updateProduct(editingProduct.id, data);
-    } else {
-      addProduct(data);
+  // Fetch profiles for resolving names
+  useEffect(() => {
+    supabase.from('profiles').select('id, full_name, email').then(({ data }) => {
+      const map = new Map<string, string>();
+      data?.forEach(p => map.set(p.id, p.full_name || p.email));
+      setProfilesMap(map);
+    });
+  }, []);
+
+  const handleSave = async (data: ProductFormData) => {
+    try {
+      if (editingProduct) {
+        await updateProduct(editingProduct.product_code, data);
+        toast.success('Product updated');
+      } else {
+        await addProduct(data);
+        toast.success('Product added');
+      }
+      setEditingProduct(null);
+    } catch (err: any) {
+      toast.error(err.message || 'Operation failed');
     }
-    setEditingProduct(null);
   };
 
   const handleEdit = (product: Product) => {
@@ -61,12 +88,44 @@ const Dashboard = ({ userName, onLogout }: DashboardProps) => {
     setDialogOpen(true);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (deleteTarget) {
-      softDeleteProduct(deleteTarget.id);
+      await softDeleteProduct(deleteTarget.product_code);
+      toast.success('Product archived');
       setDeleteTarget(null);
     }
   };
+
+  const handleRestore = async (product: Product) => {
+    await restoreProduct(product.product_code);
+    toast.success('Product restored');
+  };
+
+  const exportProductList = () => {
+    const doc = new jsPDF();
+    doc.setFontSize(16);
+    doc.text('Product List', 14, 20);
+    doc.setFontSize(10);
+    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 27);
+
+    const active = allProducts.filter(p => !p.is_deleted);
+    autoTable(doc, {
+      startY: 33,
+      head: [['Code', 'Description', 'Unit', 'Price']],
+      body: active.map(p => [
+        p.product_code,
+        p.description,
+        p.unit,
+        `$${p.current_price.toFixed(2)}`,
+      ]),
+    });
+
+    doc.save('product-list.pdf');
+    toast.success('PDF exported');
+  };
+
+  const activeCount = allProducts.filter(p => !p.is_deleted).length;
+  const deletedCount = allProducts.filter(p => p.is_deleted).length;
 
   return (
     <div className="min-h-screen bg-background">
@@ -81,7 +140,8 @@ const Dashboard = ({ userName, onLogout }: DashboardProps) => {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-sm text-muted-foreground hidden sm:block">
-              Hey, <span className="text-foreground font-medium">{userName}</span> 💖
+              <span className="text-foreground font-medium">{user.name || user.email}</span>
+              <Badge variant="secondary" className="ml-2 text-xs">{userRole}</Badge>
             </span>
             <Button variant="ghost" size="sm" onClick={onLogout} className="rounded-xl text-muted-foreground hover:text-foreground">
               <LogOut className="w-4 h-4 mr-1" /> Sign out
@@ -91,70 +151,45 @@ const Dashboard = ({ userName, onLogout }: DashboardProps) => {
       </header>
 
       <main className="container mx-auto px-4 py-6 space-y-6">
-        {/* Stats */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {[
-            { label: 'Active Products', value: activeCount, icon: Package, color: 'text-primary' },
-            { label: 'Low Stock', value: lowStockCount, icon: AlertTriangle, color: 'text-gold' },
-            { label: 'Archived', value: deletedCount, icon: Trash2, color: 'text-muted-foreground' },
-          ].map((stat, i) => (
-            <motion.div
-              key={stat.label}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.1 }}
-            >
-              <Card className="border-primary/10 hover:border-primary/25 transition-colors">
-                <CardContent className="flex items-center gap-4 p-5">
-                  <div className="w-11 h-11 rounded-xl bg-primary/8 flex items-center justify-center">
-                    <stat.icon className={`w-5 h-5 ${stat.color}`} />
-                  </div>
-                  <div>
-                    <p className="text-2xl font-display font-bold text-foreground">{stat.value}</p>
-                    <p className="text-sm text-muted-foreground">{stat.label}</p>
-                  </div>
-                </CardContent>
-              </Card>
-            </motion.div>
-          ))}
+        {/* Page Title & Actions */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div>
+            <h2 className="font-display text-2xl font-bold text-foreground">Product Management</h2>
+            <p className="text-sm text-muted-foreground">Control inventory, pricing, and product history</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <Button variant="outline" onClick={exportProductList} className="rounded-xl gap-1.5">
+              <FileText className="w-4 h-4" /> Export List
+            </Button>
+            {canAdd && (
+              <Button onClick={handleAdd} className="rounded-xl shadow-md shadow-primary/20 gap-1.5">
+                <Plus className="w-4 h-4" /> Add Product
+              </Button>
+            )}
+          </div>
         </div>
 
-        {/* Toolbar */}
+        {/* Search & Filters */}
         <Card className="border-primary/10">
           <CardContent className="p-4">
             <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
               <div className="relative flex-1 w-full">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search by name, barcode, or description..."
+                  placeholder="Search products..."
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   className="pl-9 rounded-xl border-primary/20 bg-background/60"
                 />
               </div>
-              <div className="flex items-center gap-3 flex-wrap">
-                <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                  <SelectTrigger className="w-44 rounded-xl border-primary/20 bg-background/60">
-                    <Filter className="w-4 h-4 mr-1 text-muted-foreground" />
-                    <SelectValue placeholder="All Categories" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Categories</SelectItem>
-                    {CATEGORIES.map(c => (
-                      <SelectItem key={c} value={c}>{c}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              {isAdmin && (
                 <div className="flex items-center gap-2">
                   <Switch id="show-deleted" checked={showDeleted} onCheckedChange={setShowDeleted} />
                   <Label htmlFor="show-deleted" className="text-sm text-muted-foreground whitespace-nowrap">
                     Show archived
                   </Label>
                 </div>
-                <Button onClick={handleAdd} className="rounded-xl shadow-md shadow-primary/20">
-                  <Plus className="w-4 h-4 mr-1" /> Add Product
-                </Button>
-              </div>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -163,120 +198,109 @@ const Dashboard = ({ userName, onLogout }: DashboardProps) => {
         <Card className="border-primary/10 overflow-hidden">
           <CardHeader className="pb-0 px-6 pt-5">
             <CardTitle className="font-display text-lg flex items-center gap-2">
-              <Heart className="w-4 h-4 text-primary" />
+              <Package className="w-4 h-4 text-primary" />
               Products ({products.length})
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0 pt-4">
-            <Table>
-              <TableHeader>
-                <TableRow className="border-border/50 hover:bg-transparent">
-                  <TableHead className="font-semibold">Product</TableHead>
-                  <TableHead className="font-semibold">Category</TableHead>
-                  <TableHead className="font-semibold text-right">Price</TableHead>
-                  <TableHead className="font-semibold text-right">Qty</TableHead>
-                  <TableHead className="font-semibold">Barcode</TableHead>
-                  <TableHead className="font-semibold">Status</TableHead>
-                  <TableHead className="font-semibold text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <AnimatePresence>
-                  {products.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
-                        <Package className="w-10 h-10 mx-auto mb-2 opacity-30" />
-                        No products found
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    products.map((product) => (
-                      <motion.tr
-                        key={product.id}
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className={`border-b border-border/40 transition-colors hover:bg-muted/30 ${
-                          product.isDeleted ? 'opacity-50' : ''
-                        }`}
-                      >
-                        <TableCell>
-                          <div>
-                            <p className="font-medium text-foreground">{product.name}</p>
-                            <p className="text-xs text-muted-foreground line-clamp-1">{product.description}</p>
-                          </div>
+            {loading ? (
+              <p className="text-center py-12 text-muted-foreground">Loading products...</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-border/50 hover:bg-transparent">
+                    <TableHead className="font-semibold">Product</TableHead>
+                    <TableHead className="font-semibold">Unit</TableHead>
+                    <TableHead className="font-semibold text-right">Price</TableHead>
+                    <TableHead className="font-semibold">Status</TableHead>
+                    <TableHead className="font-semibold text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <AnimatePresence>
+                    {products.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
+                          <Package className="w-10 h-10 mx-auto mb-2 opacity-30" />
+                          No products found
                         </TableCell>
-                        <TableCell>
-                          <Badge variant="secondary" className="rounded-lg font-normal">
-                            {product.category}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right font-medium">
-                          ${product.price.toFixed(2)}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <span className={product.quantity <= 5 && !product.isDeleted ? 'text-destructive font-semibold' : ''}>
-                            {product.quantity}
-                          </span>
-                          {product.quantity <= 5 && !product.isDeleted && (
-                            <Badge variant="outline" className="ml-2 text-xs border-destructive/30 text-destructive rounded-lg">
-                              Low
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">
-                          {product.barcode}
-                        </TableCell>
-                        <TableCell>
-                          {product.isDeleted ? (
-                            <Badge variant="outline" className="rounded-lg border-destructive/30 text-destructive">
-                              Archived
-                            </Badge>
-                          ) : (
-                            <Badge className="rounded-lg bg-primary/10 text-primary border-0 hover:bg-primary/15">
-                              Active
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            {product.isDeleted ? (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => restoreProduct(product.id)}
-                                className="rounded-lg text-primary hover:text-primary hover:bg-primary/10"
-                              >
+                      </TableRow>
+                    ) : (
+                      products.map(product => (
+                        <motion.tr
+                          key={product.product_code}
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          className={`border-b border-border/40 transition-colors hover:bg-muted/30 ${
+                            product.is_deleted ? 'opacity-40' : ''
+                          }`}
+                        >
+                          <TableCell>
+                            <div>
+                              <p className="font-medium text-foreground">{product.description}</p>
+                              <p className="text-xs text-muted-foreground">{product.product_code}</p>
+                            </div>
+                          </TableCell>
+                          <TableCell>{product.unit}</TableCell>
+                          <TableCell className="text-right font-medium">
+                            ${product.current_price.toFixed(2)}
+                          </TableCell>
+                          <TableCell>
+                            {product.is_deleted ? (
+                              <Badge variant="outline" className="rounded-lg border-destructive/30 text-destructive">
+                                Archived
+                              </Badge>
+                            ) : (
+                              <Badge className="rounded-lg bg-primary/10 text-primary border-0 hover:bg-primary/15">
+                                Active
+                              </Badge>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {product.is_deleted && isAdmin ? (
+                              <Button size="sm" variant="ghost" onClick={() => handleRestore(product)}
+                                className="rounded-lg text-primary hover:text-primary hover:bg-primary/10">
                                 <RotateCcw className="w-4 h-4" />
                               </Button>
-                            ) : (
-                              <>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => handleEdit(product)}
-                                  className="rounded-lg text-muted-foreground hover:text-foreground"
-                                >
-                                  <Edit2 className="w-4 h-4" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => setDeleteTarget(product)}
-                                  className="rounded-lg text-muted-foreground hover:text-destructive"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </Button>
-                              </>
-                            )}
-                          </div>
-                        </TableCell>
-                      </motion.tr>
-                    ))
-                  )}
-                </AnimatePresence>
-              </TableBody>
-            </Table>
+                            ) : !product.is_deleted ? (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button size="sm" variant="ghost" className="rounded-lg">
+                                    <MoreHorizontal className="w-4 h-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-48">
+                                  <DropdownMenuLabel>Product Options</DropdownMenuLabel>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem onClick={() => setPriceHistoryProduct(product)} className="gap-2">
+                                    <History className="w-4 h-4" /> Price History
+                                  </DropdownMenuItem>
+                                  {canEdit && (
+                                    <DropdownMenuItem onClick={() => handleEdit(product)} className="gap-2">
+                                      <Edit2 className="w-4 h-4" /> Edit Details
+                                    </DropdownMenuItem>
+                                  )}
+                                  {canDelete && (
+                                    <>
+                                      <DropdownMenuSeparator />
+                                      <DropdownMenuItem onClick={() => setDeleteTarget(product)}
+                                        className="gap-2 text-destructive focus:text-destructive">
+                                        <Trash2 className="w-4 h-4" /> Delete Product
+                                      </DropdownMenuItem>
+                                    </>
+                                  )}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            ) : null}
+                          </TableCell>
+                        </motion.tr>
+                      ))
+                    )}
+                  </AnimatePresence>
+                </TableBody>
+              </Table>
+            )}
           </CardContent>
         </Card>
       </main>
@@ -289,12 +313,20 @@ const Dashboard = ({ userName, onLogout }: DashboardProps) => {
         onSave={handleSave}
       />
 
-      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+      <PriceHistoryDialog
+        open={!!priceHistoryProduct}
+        onOpenChange={open => !open && setPriceHistoryProduct(null)}
+        product={priceHistoryProduct}
+        fetchHistory={fetchPriceHistory}
+        profilesMap={profilesMap}
+      />
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={open => !open && setDeleteTarget(null)}>
         <AlertDialogContent className="border-primary/20">
           <AlertDialogHeader>
             <AlertDialogTitle className="font-display">Archive this product?</AlertDialogTitle>
             <AlertDialogDescription>
-              <strong>{deleteTarget?.name}</strong> will be soft-deleted and can be restored later.
+              <strong>{deleteTarget?.description}</strong> ({deleteTarget?.product_code}) will be soft-deleted and can be restored by an admin.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -1,128 +1,171 @@
-import { useState, useCallback, useMemo } from 'react';
-import { Product, ProductFormData } from '@/types/product';
+import { useState, useEffect, useCallback } from 'react';
+import { supabase } from '@/integrations/supabase/client';
+import { Product, ProductFormData, PriceHistoryRow, UserPermissions } from '@/types/product';
 
-const generateId = () => Math.random().toString(36).substring(2, 15);
-
-const SAMPLE_PRODUCTS: Product[] = [
-  {
-    id: generateId(),
-    name: 'Silk Rose Blouse',
-    description: 'Elegant silk blouse with rose embroidery',
-    price: 89.99,
-    category: 'Clothing',
-    quantity: 25,
-    barcode: '1234567890123',
-    isDeleted: false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: generateId(),
-    name: 'Cherry Blossom Perfume',
-    description: 'Light floral fragrance with cherry blossom notes',
-    price: 65.00,
-    category: 'Beauty & Health',
-    quantity: 50,
-    barcode: '1234567890124',
-    isDeleted: false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: generateId(),
-    name: 'Rose Gold Earrings',
-    description: 'Dainty rose gold hoop earrings',
-    price: 45.00,
-    category: 'Other',
-    quantity: 100,
-    barcode: '1234567890125',
-    isDeleted: false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: generateId(),
-    name: 'Velvet Journal',
-    description: 'Pink velvet covered lined journal',
-    price: 24.99,
-    category: 'Books & Stationery',
-    quantity: 0,
-    barcode: '1234567890126',
-    isDeleted: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-];
-
-export function useProducts() {
-  const [products, setProducts] = useState<Product[]>(SAMPLE_PRODUCTS);
+export function useProducts(userId?: string) {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [showDeleted, setShowDeleted] = useState(false);
+  const [permissions, setPermissions] = useState<UserPermissions>({
+    can_add: false, can_edit: false, can_delete: false, is_blocked: false,
+  });
+  const [userRole, setUserRole] = useState<'admin' | 'user'>('user');
 
-  const addProduct = useCallback((data: ProductFormData) => {
-    const newProduct: Product = {
-      ...data,
-      id: generateId(),
-      isDeleted: false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+  // Fetch user permissions & role
+  useEffect(() => {
+    if (!userId) return;
+    const fetchPerms = async () => {
+      const [{ data: perms }, { data: role }] = await Promise.all([
+        supabase.from('user_permissions').select('*').eq('user_id', userId).single(),
+        supabase.from('user_roles').select('role').eq('user_id', userId).single(),
+      ]);
+      if (perms) setPermissions(perms as UserPermissions);
+      if (role) setUserRole(role.role as 'admin' | 'user');
     };
-    setProducts(prev => [newProduct, ...prev]);
-  }, []);
+    fetchPerms();
+  }, [userId]);
 
-  const updateProduct = useCallback((id: string, data: ProductFormData) => {
-    setProducts(prev =>
-      prev.map(p =>
-        p.id === id ? { ...p, ...data, updatedAt: new Date().toISOString() } : p
-      )
-    );
-  }, []);
+  const fetchProducts = useCallback(async () => {
+    setLoading(true);
+    // Fetch all products with their latest price
+    const { data: prods } = await supabase
+      .from('products')
+      .select('*')
+      .order('product_code');
 
-  const softDeleteProduct = useCallback((id: string) => {
-    setProducts(prev =>
-      prev.map(p =>
-        p.id === id ? { ...p, isDeleted: true, updatedAt: new Date().toISOString() } : p
-      )
-    );
-  }, []);
+    if (!prods) { setLoading(false); return; }
 
-  const restoreProduct = useCallback((id: string) => {
-    setProducts(prev =>
-      prev.map(p =>
-        p.id === id ? { ...p, isDeleted: false, updatedAt: new Date().toISOString() } : p
-      )
-    );
-  }, []);
+    // Fetch latest price for each product
+    const { data: prices } = await supabase
+      .from('price_history')
+      .select('*')
+      .eq('is_deleted', false)
+      .order('effectivity_date', { ascending: false })
+      .order('stamp_op_date', { ascending: false });
 
-  const filteredProducts = useMemo(() => {
-    return products.filter(p => {
-      if (!showDeleted && p.isDeleted) return false;
-      if (categoryFilter !== 'all' && p.category !== categoryFilter) return false;
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        return (
-          p.name.toLowerCase().includes(q) ||
-          p.barcode.includes(q) ||
-          p.description.toLowerCase().includes(q)
-        );
+    const priceMap = new Map<string, number>();
+    prices?.forEach(p => {
+      if (!priceMap.has(p.product_code)) {
+        priceMap.set(p.product_code, Number(p.unit_price));
       }
-      return true;
     });
-  }, [products, searchQuery, categoryFilter, showDeleted]);
+
+    const mapped: Product[] = prods.map(p => ({
+      product_code: p.product_code,
+      description: p.description,
+      unit: p.unit,
+      is_deleted: p.is_deleted,
+      stamp_op_type: p.stamp_op_type,
+      stamp_op_by: p.stamp_op_by,
+      stamp_op_date: p.stamp_op_date,
+      current_price: priceMap.get(p.product_code) ?? 0,
+    }));
+
+    setProducts(mapped);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { fetchProducts(); }, [fetchProducts]);
+
+  const addProduct = useCallback(async (data: ProductFormData) => {
+    if (!userId) return;
+    const { error } = await supabase.from('products').insert({
+      product_code: data.product_code,
+      description: data.description,
+      unit: data.unit,
+      stamp_op_type: 'ADD',
+      stamp_op_by: userId,
+    });
+    if (error) throw error;
+
+    // Insert initial price
+    await supabase.from('price_history').insert({
+      product_code: data.product_code,
+      unit_price: data.unit_price,
+      stamp_op_type: 'ADD',
+      stamp_op_by: userId,
+    });
+
+    await fetchProducts();
+  }, [userId, fetchProducts]);
+
+  const updateProduct = useCallback(async (productCode: string, data: Partial<ProductFormData>) => {
+    if (!userId) return;
+    const updates: Record<string, unknown> = {
+      stamp_op_type: 'EDIT',
+      stamp_op_by: userId,
+      stamp_op_date: new Date().toISOString(),
+    };
+    if (data.description !== undefined) updates.description = data.description;
+    if (data.unit !== undefined) updates.unit = data.unit;
+
+    await supabase.from('products').update(updates).eq('product_code', productCode);
+
+    // If price changed, add price history row
+    if (data.unit_price !== undefined) {
+      await supabase.from('price_history').insert({
+        product_code: productCode,
+        unit_price: data.unit_price,
+        stamp_op_type: 'EDIT',
+        stamp_op_by: userId,
+      });
+    }
+
+    await fetchProducts();
+  }, [userId, fetchProducts]);
+
+  const softDeleteProduct = useCallback(async (productCode: string) => {
+    if (!userId) return;
+    await supabase.from('products').update({
+      is_deleted: true,
+      stamp_op_type: 'DELETE',
+      stamp_op_by: userId,
+      stamp_op_date: new Date().toISOString(),
+    }).eq('product_code', productCode);
+    await fetchProducts();
+  }, [userId, fetchProducts]);
+
+  const restoreProduct = useCallback(async (productCode: string) => {
+    if (!userId) return;
+    await supabase.from('products').update({
+      is_deleted: false,
+      stamp_op_type: 'RECOVER',
+      stamp_op_by: userId,
+      stamp_op_date: new Date().toISOString(),
+    }).eq('product_code', productCode);
+    await fetchProducts();
+  }, [userId, fetchProducts]);
+
+  const fetchPriceHistory = useCallback(async (productCode: string): Promise<PriceHistoryRow[]> => {
+    const { data } = await supabase
+      .from('price_history')
+      .select('*')
+      .eq('product_code', productCode)
+      .order('effectivity_date', { ascending: false })
+      .order('stamp_op_date', { ascending: false });
+    return (data ?? []) as PriceHistoryRow[];
+  }, []);
+
+  // Filtered products
+  const filteredProducts = products.filter(p => {
+    if (!showDeleted && p.is_deleted) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      return p.product_code.toLowerCase().includes(q) ||
+        p.description.toLowerCase().includes(q);
+    }
+    return true;
+  });
 
   return {
     products: filteredProducts,
     allProducts: products,
-    searchQuery,
-    setSearchQuery,
-    categoryFilter,
-    setCategoryFilter,
-    showDeleted,
-    setShowDeleted,
-    addProduct,
-    updateProduct,
-    softDeleteProduct,
-    restoreProduct,
+    loading,
+    searchQuery, setSearchQuery,
+    showDeleted, setShowDeleted,
+    permissions, userRole,
+    addProduct, updateProduct, softDeleteProduct, restoreProduct,
+    fetchPriceHistory, refetch: fetchProducts,
   };
 }
