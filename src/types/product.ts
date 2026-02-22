@@ -1,26 +1,37 @@
+// Maps to the Supabase `products` table + joined price
 export interface Product {
-  id: string;
-  name: string;
+  product_code: string;
   description: string;
-  price: number;
-  category: string;
-  quantity: number;
-  barcode: string;
-  isDeleted: boolean;
-  createdAt: string;
-  updatedAt: string;
+  unit: string;
+  is_deleted: boolean;
+  stamp_op_type: string;
+  stamp_op_by: string | null;
+  stamp_op_date: string;
+  // Derived from latest price_history row
+  current_price: number;
 }
 
-export type ProductFormData = Omit<Product, 'id' | 'isDeleted' | 'createdAt' | 'updatedAt'>;
+export interface PriceHistoryRow {
+  id: number;
+  product_code: string;
+  unit_price: number;
+  effectivity_date: string;
+  stamp_op_type: string;
+  stamp_op_by: string | null;
+  stamp_op_date: string;
+  is_deleted: boolean;
+}
 
-export const CATEGORIES = [
-  'Electronics',
-  'Clothing',
-  'Food & Beverages',
-  'Home & Garden',
-  'Beauty & Health',
-  'Sports & Outdoors',
-  'Toys & Games',
-  'Books & Stationery',
-  'Other',
-] as const;
+export interface ProductFormData {
+  product_code: string;
+  description: string;
+  unit: string;
+  unit_price: number;
+}
+
+export interface UserPermissions {
+  can_add: boolean;
+  can_edit: boolean;
+  can_delete: boolean;
+  is_blocked: boolean;
+}
