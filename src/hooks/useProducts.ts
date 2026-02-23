@@ -147,9 +147,10 @@ export function useProducts(userId?: string) {
     return (data ?? []) as PriceHistoryRow[];
   }, []);
 
-  // Filtered products
+  // Filtered products — always include deleted (greyed out in UI), unless non-admin
   const filteredProducts = products.filter(p => {
-    if (!showDeleted && p.is_deleted) return false;
+    // Non-admins don't see deleted products
+    if (userRole !== 'admin' && p.is_deleted) return false;
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       return p.product_code.toLowerCase().includes(q) ||
