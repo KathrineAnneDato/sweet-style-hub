@@ -15,14 +15,12 @@ export function useAuth() {
   const [error, setError] = useState<string | null>(null);
 
   const buildAuthUser = useCallback(async (supaUser: User): Promise<AuthUser | null> => {
-    // Fetch profile
     const { data: profile } = await supabase
       .from('profiles')
       .select('full_name')
       .eq('id', supaUser.id)
       .single();
 
-    // Fetch role
     const { data: roleRow } = await supabase
       .from('user_roles')
       .select('role')
@@ -32,33 +30,52 @@ export function useAuth() {
     return {
       id: supaUser.id,
       email: supaUser.email ?? '',
-      name: profile?.full_name || supaUser.email?.split('@')[0] || '',
+      name: profile?.full_name || supaUser.user_metadata?.full_name || supaUser.email?.split('@')[0] || '',
       role: (roleRow?.role as 'admin' | 'user') ?? 'user',
     };
   }, []);
 
   useEffect(() => {
+    let isMounted = true;
+
+    // Listener for ONGOING auth changes — does NOT control isLoading
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
+      (_event, session) => {
+        if (!isMounted) return;
         if (session?.user) {
-          const authUser = await buildAuthUser(session.user);
-          setUser(authUser);
+          // Use setTimeout to avoid deadlock with Supabase internals
+          setTimeout(async () => {
+            if (!isMounted) return;
+            const authUser = await buildAuthUser(session.user);
+            if (isMounted) setUser(authUser);
+          }, 0);
         } else {
           setUser(null);
         }
-        setIsLoading(false);
       }
     );
 
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (session?.user) {
-        const authUser = await buildAuthUser(session.user);
-        setUser(authUser);
-      }
-      setIsLoading(false);
-    });
+    // INITIAL load — controls isLoading
+    const initializeAuth = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!isMounted) return;
 
-    return () => subscription.unsubscribe();
+        if (session?.user) {
+          const authUser = await buildAuthUser(session.user);
+          if (isMounted) setUser(authUser);
+        }
+      } finally {
+        if (isMounted) setIsLoading(false);
+      }
+    };
+
+    initializeAuth();
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
   }, [buildAuthUser]);
 
   const login = useCallback(async (email: string, password: string) => {
