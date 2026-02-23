@@ -14,7 +14,23 @@ export function useAuth() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const checkBlocked = useCallback(async (userId: string): Promise<boolean> => {
+    const { data } = await supabase
+      .from('user_permissions')
+      .select('is_blocked')
+      .eq('user_id', userId)
+      .single();
+    return data?.is_blocked ?? false;
+  }, []);
+
   const buildAuthUser = useCallback(async (supaUser: User): Promise<AuthUser | null> => {
+    // Check blocked status first
+    const blocked = await checkBlocked(supaUser.id);
+    if (blocked) {
+      await supabase.auth.signOut();
+      return null;
+    }
+
     const { data: profile } = await supabase
       .from('profiles')
       .select('full_name')
@@ -33,21 +49,26 @@ export function useAuth() {
       name: profile?.full_name || supaUser.user_metadata?.full_name || supaUser.email?.split('@')[0] || '',
       role: (roleRow?.role as 'admin' | 'user') ?? 'user',
     };
-  }, []);
+  }, [checkBlocked]);
 
   useEffect(() => {
     let isMounted = true;
 
-    // Listener for ONGOING auth changes — does NOT control isLoading
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         if (!isMounted) return;
         if (session?.user) {
-          // Use setTimeout to avoid deadlock with Supabase internals
           setTimeout(async () => {
             if (!isMounted) return;
             const authUser = await buildAuthUser(session.user);
-            if (isMounted) setUser(authUser);
+            if (isMounted) {
+              if (!authUser) {
+                setUser(null);
+                setError('Your account has been blocked. Please contact an administrator.');
+              } else {
+                setUser(authUser);
+              }
+            }
           }, 0);
         } else {
           setUser(null);
@@ -55,7 +76,6 @@ export function useAuth() {
       }
     );
 
-    // INITIAL load — controls isLoading
     const initializeAuth = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
@@ -63,7 +83,14 @@ export function useAuth() {
 
         if (session?.user) {
           const authUser = await buildAuthUser(session.user);
-          if (isMounted) setUser(authUser);
+          if (isMounted) {
+            if (!authUser) {
+              setUser(null);
+              setError('Your account has been blocked. Please contact an administrator.');
+            } else {
+              setUser(authUser);
+            }
+          }
         }
       } finally {
         if (isMounted) setIsLoading(false);
@@ -81,12 +108,23 @@ export function useAuth() {
   const login = useCallback(async (email: string, password: string) => {
     setIsLoading(true);
     setError(null);
-    const { error: err } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error: err } = await supabase.auth.signInWithPassword({ email, password });
     if (err) {
       setError(err.message);
+      setIsLoading(false);
+      return;
+    }
+    // Check blocked after successful auth
+    if (data.user) {
+      const blocked = await checkBlocked(data.user.id);
+      if (blocked) {
+        await supabase.auth.signOut();
+        setError('Your account has been blocked. Please contact an administrator.');
+        setUser(null);
+      }
     }
     setIsLoading(false);
-  }, []);
+  }, [checkBlocked]);
 
   const signup = useCallback(async (email: string, password: string, fullName: string) => {
     setIsLoading(true);
