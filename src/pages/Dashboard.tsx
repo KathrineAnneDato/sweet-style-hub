@@ -175,6 +175,7 @@ const Dashboard = ({ user, onLogout }: DashboardProps) => {
                 onRestore={handleRestore}
                 onPriceHistory={setPriceHistoryProduct}
                 onExport={exportProductList}
+                profilesMap={profilesMap}
               />
             </TabsContent>
 
@@ -199,6 +200,7 @@ const Dashboard = ({ user, onLogout }: DashboardProps) => {
             onRestore={handleRestore}
             onPriceHistory={setPriceHistoryProduct}
             onExport={exportProductList}
+            profilesMap={profilesMap}
           />
         )}
       </main>
@@ -257,12 +259,14 @@ interface ProductsSectionProps {
   onRestore: (p: Product) => void;
   onPriceHistory: (p: Product) => void;
   onExport: () => void;
+  profilesMap: Map<string, string>;
 }
 
 const ProductsSection = ({
   products, loading, searchQuery, setSearchQuery,
   isAdmin, canAdd, canEdit, canDelete,
   onAdd, onEdit, onDelete, onRestore, onPriceHistory, onExport,
+  profilesMap,
 }: ProductsSectionProps) => (
   <>
     {/* Page Title & Actions */}
@@ -317,6 +321,9 @@ const ProductsSection = ({
                 <TableHead className="font-semibold">Unit</TableHead>
                 <TableHead className="font-semibold text-right">Price</TableHead>
                 <TableHead className="font-semibold">Status</TableHead>
+                {isAdmin && <TableHead className="font-semibold">Op Type</TableHead>}
+                {isAdmin && <TableHead className="font-semibold">Op By</TableHead>}
+                {isAdmin && <TableHead className="font-semibold">Op Date</TableHead>}
                 <TableHead className="font-semibold text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -324,7 +331,7 @@ const ProductsSection = ({
               <AnimatePresence>
                 {products.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
+                    <TableCell colSpan={isAdmin ? 8 : 5} className="text-center py-12 text-muted-foreground">
                       <Package className="w-10 h-10 mx-auto mb-2 opacity-30" />
                       No products found
                     </TableCell>
@@ -363,6 +370,21 @@ const ProductsSection = ({
                           </Badge>
                         )}
                       </TableCell>
+                      {isAdmin && (
+                        <TableCell className="text-xs text-muted-foreground">
+                          <Badge variant="outline" className="rounded-lg text-xs">{product.stamp_op_type}</Badge>
+                        </TableCell>
+                      )}
+                      {isAdmin && (
+                        <TableCell className="text-xs text-muted-foreground">
+                          {product.stamp_op_by ? (profilesMap.get(product.stamp_op_by) || product.stamp_op_by.slice(0, 8)) : '—'}
+                        </TableCell>
+                      )}
+                      {isAdmin && (
+                        <TableCell className="text-xs text-muted-foreground">
+                          {new Date(product.stamp_op_date).toLocaleString()}
+                        </TableCell>
+                      )}
                       <TableCell className="text-right">
                         {product.is_deleted && isAdmin ? (
                           <Button size="sm" variant="ghost" onClick={() => onRestore(product)}
