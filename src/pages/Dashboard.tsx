@@ -22,12 +22,13 @@ import {
 } from '@/components/ui/alert-dialog';
 import ProductDialog from '@/components/ProductDialog';
 import PriceHistoryDialog from '@/components/PriceHistoryDialog';
-import ProductListDialog from '@/components/ProductListDialog';
 import UserManagement from '@/components/UserManagement';
 import { useProducts } from '@/hooks/useProducts';
 import { Product, ProductFormData } from '@/types/product';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 interface DashboardProps {
   user: { id: string; email: string; name: string; role: 'admin' | 'user' };
@@ -46,7 +47,6 @@ const Dashboard = ({ user, onLogout }: DashboardProps) => {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
   const [priceHistoryProduct, setPriceHistoryProduct] = useState<Product | null>(null);
-  const [productListOpen, setProductListOpen] = useState(false);
   const [profilesMap, setProfilesMap] = useState<Map<string, string>>(new Map());
 
   const isAdmin = userRole === 'admin';
@@ -100,7 +100,48 @@ const Dashboard = ({ user, onLogout }: DashboardProps) => {
     toast.success('Product restored');
   };
 
-  const handleOpenProductList = () => setProductListOpen(true);
+  const exportProductList = () => {
+    const doc = new jsPDF();
+    doc.setFontSize(16);
+    doc.text('Product List', 14, 20);
+    doc.setFontSize(10);
+    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 27);
+
+    const exportData = isAdmin
+      ? allProducts
+      : allProducts.filter(p => !p.is_deleted);
+
+    if (isAdmin) {
+      autoTable(doc, {
+        startY: 33,
+        head: [['Code', 'Description', 'Unit', 'Price', 'Status', 'Op Type', 'Op By', 'Op Date']],
+        body: exportData.map(p => [
+          p.product_code,
+          p.description,
+          p.unit,
+          `$${p.current_price.toFixed(2)}`,
+          p.is_deleted ? 'Archived' : 'Active',
+          p.stamp_op_type,
+          p.stamp_op_by ? (profilesMap.get(p.stamp_op_by) || p.stamp_op_by.slice(0, 8)) : '—',
+          new Date(p.stamp_op_date).toLocaleString(),
+        ]),
+      });
+    } else {
+      autoTable(doc, {
+        startY: 33,
+        head: [['Code', 'Description', 'Unit', 'Price']],
+        body: exportData.map(p => [
+          p.product_code,
+          p.description,
+          p.unit,
+          `$${p.current_price.toFixed(2)}`,
+        ]),
+      });
+    }
+
+    doc.save('product-list.pdf');
+    toast.success('PDF exported');
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -153,7 +194,7 @@ const Dashboard = ({ user, onLogout }: DashboardProps) => {
                 onDelete={setDeleteTarget}
                 onRestore={handleRestore}
                 onPriceHistory={setPriceHistoryProduct}
-                onExport={handleOpenProductList}
+                onExport={exportProductList}
                 profilesMap={profilesMap}
               />
             </TabsContent>
@@ -178,7 +219,7 @@ const Dashboard = ({ user, onLogout }: DashboardProps) => {
             onDelete={setDeleteTarget}
             onRestore={handleRestore}
             onPriceHistory={setPriceHistoryProduct}
-            onExport={handleOpenProductList}
+            onExport={exportProductList}
             profilesMap={profilesMap}
           />
         )}
@@ -190,14 +231,6 @@ const Dashboard = ({ user, onLogout }: DashboardProps) => {
         onOpenChange={setDialogOpen}
         product={editingProduct}
         onSave={handleSave}
-      />
-
-      <ProductListDialog
-        open={productListOpen}
-        onOpenChange={setProductListOpen}
-        allProducts={allProducts}
-        isAdmin={isAdmin}
-        profilesMap={profilesMap}
       />
 
       <PriceHistoryDialog
@@ -264,7 +297,7 @@ const ProductsSection = ({
       </div>
       <div className="flex items-center gap-3">
         <Button variant="outline" onClick={onExport} className="rounded-xl gap-1.5">
-          <FileText className="w-4 h-4" /> Product List
+          <FileText className="w-4 h-4" /> Export List
         </Button>
         {canAdd && (
           <Button onClick={onAdd} className="rounded-xl shadow-md shadow-primary/20 gap-1.5">
