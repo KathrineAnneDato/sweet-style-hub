@@ -107,17 +107,37 @@ const Dashboard = ({ user, onLogout }: DashboardProps) => {
     doc.setFontSize(10);
     doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 27);
 
-    const active = allProducts.filter(p => !p.is_deleted);
-    autoTable(doc, {
-      startY: 33,
-      head: [['Code', 'Description', 'Unit', 'Price']],
-      body: active.map(p => [
-        p.product_code,
-        p.description,
-        p.unit,
-        `$${p.current_price.toFixed(2)}`,
-      ]),
-    });
+    const exportData = isAdmin
+      ? allProducts
+      : allProducts.filter(p => !p.is_deleted);
+
+    if (isAdmin) {
+      autoTable(doc, {
+        startY: 33,
+        head: [['Code', 'Description', 'Unit', 'Price', 'Status', 'Op Type', 'Op By', 'Op Date']],
+        body: exportData.map(p => [
+          p.product_code,
+          p.description,
+          p.unit,
+          `$${p.current_price.toFixed(2)}`,
+          p.is_deleted ? 'Archived' : 'Active',
+          p.stamp_op_type,
+          p.stamp_op_by ? (profilesMap.get(p.stamp_op_by) || p.stamp_op_by.slice(0, 8)) : '—',
+          new Date(p.stamp_op_date).toLocaleString(),
+        ]),
+      });
+    } else {
+      autoTable(doc, {
+        startY: 33,
+        head: [['Code', 'Description', 'Unit', 'Price']],
+        body: exportData.map(p => [
+          p.product_code,
+          p.description,
+          p.unit,
+          `$${p.current_price.toFixed(2)}`,
+        ]),
+      });
+    }
 
     doc.save('product-list.pdf');
     toast.success('PDF exported');
